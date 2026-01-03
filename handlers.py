@@ -6,7 +6,7 @@ from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.fsm.state import State,StatesGroup
 from aiogram.fsm.context import FSMContext
 
-import app.keyboards  as kb
+import keyboards  as kb
 import re
 
 main_id=1
