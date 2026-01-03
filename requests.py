@@ -1,5 +1,5 @@
-from app.database.models import async_assign
-from app.database.models import User, Category, Item,Main_Category
+from models import async_assign
+from models import User, Category, Item,Main_Category
 
 from sqlalchemy import select, update,delete,desc
 
