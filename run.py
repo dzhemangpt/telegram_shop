@@ -1,13 +1,13 @@
 import aiosqlite
 import asyncio
 
-from  aiogram import Dispatcher,Bot
+from aiogram import Dispatcher,Bot
 
 from config import TOKEN
 
-from app.handlers import router
+from handlers import router
 
-from app.database.models import async_main
+from models import async_main
 
 import sys
 import os
