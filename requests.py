@@ -41,9 +41,7 @@ async def update_user(tg_id, username: str = None, name: str = None,
 async def get_user(tg_id, field:str = None):
     async with async_assign() as session:
         user = await session.scalar(select(User).where(User.tg_id == tg_id))
-    
     if not user:
-
         return False
     else:
         if field is None:
