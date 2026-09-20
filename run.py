@@ -8,9 +8,9 @@ from aiogram import Dispatcher,Bot
 
 from config import TOKEN
 
-from handlers import router
+from app.handlers import router
 
-from models import async_main
+from app.database.models import async_main
 
 import sys
 import os

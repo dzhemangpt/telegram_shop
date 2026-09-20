@@ -1,0 +1,6 @@
+AGENTS.md
+config.py
+db.sqlite3
+tests/*
+.venv/*
+__pycache__/*

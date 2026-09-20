@@ -1,7 +1,7 @@
-from models import async_assign
-from models import User, Category, Item,Main_Category
+from app.database.models import async_assign,User, Category, Item,Main_Category
 
 from sqlalchemy import select, update,delete,desc
+
 
 async def set_user(tg_id,username,name,email,phone):
     async with async_assign() as session:
