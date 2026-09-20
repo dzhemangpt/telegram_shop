@@ -1,38 +1,33 @@
-""" Это изменения в проект, которые я внес на локалке
-и запушу в гитхаб репозиторий"""
+"""Start the Telegram shop with long polling."""
 
-import aiosqlite
 import asyncio
+import logging
 
-from aiogram import Dispatcher,Bot
+from aiogram import Bot, Dispatcher
+from aiogram.fsm.storage.memory import SimpleEventIsolation
 
-from config import TOKEN
-
+from app.config import Settings
+from app.database.models import async_main, engine
 from app.handlers import router
 
-from app.database.models import async_main
 
-import sys
-import os
-
-
-bot=Bot(token=TOKEN)
-dp=Dispatcher()
-
-
-
-async def main():
-    print("Телеграм бот запущен успешно!\nЧтобы проверить его работу, напишите боту /start в Telegram: @dzheman_gpt_bot")
-    await async_main()
-    dp.include_router(router)
-    await dp.start_polling(bot)
-
-
-if __name__ == '__main__':
+async def main() -> None:
+    settings = Settings.from_env()
+    bot = Bot(token=settings.bot_token)
+    dispatcher = Dispatcher(events_isolation=SimpleEventIsolation())
+    dispatcher.include_router(router)
     try:
-        if sys.platform == 'win32':
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+        await async_main()
+        logging.info("Starting shop polling")
+        await dispatcher.start_polling(bot, admin_chat_id=settings.admin_chat_id)
+    finally:
+        await bot.session.close()
+        await engine.dispose()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    try:
         asyncio.run(main())
-        
-    except KeyboardInterrupt:
-        print("Exit")
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")

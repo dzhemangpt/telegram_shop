@@ -1,237 +1,263 @@
-from aiogram import F, Router,Bot
-from random import randrange
-from aiogram.filters import CommandStart,Command
-from aiogram.types import Message, CallbackQuery, BufferedInputFile
+"""Catalog navigation and a three-step checkout in private chats."""
 
-from aiogram.fsm.state import State,StatesGroup
+import logging
+from uuid import uuid4
+
+from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
+from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-
-import app.keyboards  as kb
-import re
-
-main_id=1
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import BufferedInputFile, CallbackQuery, Message
+from sqlalchemy.exc import SQLAlchemyError
 
 import app.database.requests as req
+import app.keyboards as kb
+from app.validation import normalize_phone, valid_email, valid_name
 
-class Reg(StatesGroup):
-    name=State()
-    phone=State()
-    mail=State()
-    item_id=State()
-    name=State()
-    main_category=State()
-
+logger = logging.getLogger(__name__)
+router = Router()
+router.message.filter(F.chat.type == "private")
+router.callback_query.filter(F.message.chat.type == "private")
 
 
-router = Router() 
-
-@router.callback_query(F.data.startswith('buy_'))
-async def first_step(callback: CallbackQuery, state: FSMContext):
-    item_id = callback.data.replace('buy_', '')
-    await state.update_data(name=callback.from_user.id)
-    await state.update_data(item_id=item_id)
-    
-    tg_id = callback.from_user.id
-    user_exists = await req.get_user(tg_id)
-    
-
-    
-    if not user_exists:
-        await callback.message.reply(text="😊Отлично, давайте оформим ваш заказ! Как к вам обращаться?")
-    else:
-
-        await callback.message.reply(
-            text="😊Отлично, давайте оформим ваш заказ! Как к вам обращаться?",
-            reply_markup=await kb.helper(tg_id=tg_id, field='name')
-        )
-
-    await state.set_state(Reg.name)
-
-@router.message(Reg.name)
-async def get_name(message: Message, state: FSMContext):
-    await state.update_data(name=message.text)
-    await state.set_state(Reg.phone)
-    
-    tg_id = message.from_user.id
-    
-    user=await req.get_user(tg_id=tg_id)
-    if user and user.phone:  
-        await message.reply(
-            text='🔢Введите номер телефона по следующему образцу:\n+70000000 (например +79591112233)',
-            reply_markup=await kb.helper(tg_id=tg_id, field='phone')
-        )
-    else:
-        await message.reply(
-            text='🔢Введите номер телефона по следующему образцу:\n+70000000 (например +79591112233)'
-        )
-
-@router.message(Reg.phone)
-async def get_phone(message: Message, state: FSMContext):
-    if re.fullmatch(r'^(\+7|8)\d{10}$', message.text):
-        await state.update_data(phone=message.text)
-        
-        tg_id = message.from_user.id
-        user = await req.get_user(tg_id)
-        
-        if user and user.email: 
-            await message.answer(
-                "✉️Отлично! Последний шаг\nВведите электронную почту, по которой мы свяжемся с вами\nПример почты: telegram@mail.ru, krossovki.krutie@gmail.com",
-                reply_markup=await kb.helper(tg_id=tg_id, field='email')
-            )
-        else:
-            await message.answer(
-                "✉️Отлично! Последний шаг\nВведите электронную почту, по которой мы свяжемся с вами\nПример почты: telegram@mail.ru, krossovki.krutie@gmail.com"
-            )
-        await state.set_state(Reg.mail)
-    else:
-        await message.reply(
-            "❌Неправильный ввод!\nВведите номер телефона по следующему образцу:\n+70000000 (например +79591112233)"
-        )
-        await state.set_state(Reg.phone)
-
-@router.message(Reg.mail)
-async def get_mmail(message: Message, state: FSMContext, bot: Bot):
-    if re.fullmatch(r'^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)*\.[a-zA-Z0-9-]{2,}$', message.text):
-        data = await state.get_data()
-        item_id1 = data.get("item_id")
-        email = message.text
-        items = await req.get_item(item_id1)
-        
-        if not items:
-            await message.answer("Товар не найден!")
-            await state.clear()
-            return
- 
-        for item in items:
-            name1 = item.name
-            desc1 = item.description
-            cost1 = item.price
-        
-        id_zakaz = randrange(10000, 99999)
-        
-
-        await req.update_user(
-            tg_id=message.from_user.id,
-            username=message.from_user.username,
-            name=data['name'],
-            email=email,
-            phone=data['phone']
-        )
-        
-        mes = f'✅Заказ №{id_zakaz}:\n\nНазвание товара: {name1}\n\nОписание товара: {desc1}\n\nЦена товара: {cost1}'
-        await message.answer(mes)
-        
-        admin_mes = f'✉️Заказ №{id_zakaz}:\n\nTelegram username: {message.from_user.username}\n\nОбращаться по имени: {data["name"]}\n\nНомер телефона заказчика: {data["phone"]}\n\nЭлектронная почта: {email}\n\nНазвание товара: {name1}\n\nОписание товара: {desc1}\n\nЦена товара: {cost1}'
-        
-        await bot.send_message(chat_id=5035457204, text=admin_mes)
-        await message.answer("Наш менеджер свяжется с вами в течение 24-х часов для проведения покупки!\nСпасибо, что выбрали нас!😊",reply_markup=kb.main)
-        await state.clear()
-    else:
-        await message.answer(
-            "❌Почта введена неверно!\nВведите электронную почту, по которой мы свяжемся с вами\nПример почты: telegram@mail.ru, krossovki.krutie@gmail.com"
-        )
-        await state.set_state(Reg.mail)
+class Checkout(StatesGroup):
+    name = State()
+    phone = State()
+    email = State()
 
 
+# Commands precede state handlers so the customer can always leave checkout.
+@router.message(CommandStart())
+async def start(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "😊 Вас приветствует спортивный магазин GYM RATS!\n"
+        "Откройте каталог, чтобы выбрать товар. Подсказки: /help.",
+        reply_markup=kb.main,
+    )
 
 
+@router.message(Command("cancel"))
+async def cancel(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await message.answer(
+        "Оформление отменено. Вы можете вернуться в каталог.", reply_markup=kb.main
+    )
 
 
-@router.message(Command('help'))
-async def get_help(message: Message):
-    await message.answer('/shop - начать поиск товаров для покупки\n/start - запустить бота\n/help - вызвать меню подсказки еще раз\nПроцесс покупки происходит путем нажатия по клавишам после /shop. Когда вы выбрали нужный товар введите имя, по которому вы хотели бы, чтобы к вам обращались. После - номер телефона и почту для электронной связи. Наш менеджер так же сможет связаться с вами в телеграм по вашему username',reply_markup=kb.main)
+@router.message(Command("help"))
+async def help_command(message: Message) -> None:
+    await message.answer(
+        "/shop — открыть каталог\n/start — главное меню\n"
+        "/cancel — отменить оформление\n/help — помощь\n\n"
+        "Выберите раздел, категорию и товар, затем нажмите «Купить». "
+        "Укажите имя, телефон и email. Заказ передаётся менеджеру; "
+        "оплата в боте не производится. Во время оформления /help сохраняет ваш текущий шаг."
+    )
 
 
-
-
-
-@router.message(Command('start'))
-async def starting(message: Message):
-    await message.answer('😊Здравствуйте! Вас приветсвует спортивный магазин "GYM RATS"\nЧтобы выбрать себе лучшие товары, нажмите кнопку Каталог\nДля более подробной информации о магазине введите /help',reply_markup=kb.main)
+async def show_catalog(message: Message) -> None:
+    entries = await req.get_maincategories()
+    await message.answer(
+        "🛍 Выберите раздел каталога" if entries else "Каталог пока пуст. Загляните позже!",
+        reply_markup=kb.main_categories(entries) if entries else kb.main,
+    )
 
 
 @router.message(Command("shop"))
-async def market(message:Message):
-    await catelog(message)
-
-@router.message(F.text=='🛍Каталог')
-async def catelog(message:Message):
-    await message.answer(text="Доступны следующие категории товаров",reply_markup=await kb.main_categories())
+@router.message(F.text == kb.CATALOG_BUTTON)
+async def catalog(message: Message, state: FSMContext) -> None:
+    await state.clear()
+    await show_catalog(message)
 
 
-@router.callback_query(F.data.startswith('main_'))
-async def category(callback: CallbackQuery):
+@router.message(F.text.startswith("/"))
+async def unknown_command(message: Message) -> None:
+    await message.answer("Неизвестная команда. Список команд: /help. Отмена заказа: /cancel.")
+
+
+def callback_id(callback: CallbackQuery) -> int:
+    return int(callback.data.split("_", 1)[1])
+
+
+@router.callback_query(F.data.regexp(r"^main_[1-9][0-9]{0,17}$"))
+async def select_main_category(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    global main_id
-    main_id = callback.data.split('_')[1]
-    
-    try:
+    if not isinstance(callback.message, Message):
+        return
+    await state.clear()
+    entries = await req.get_categories(callback_id(callback))
+    await callback.message.answer(
+        "🛒 Выберите категорию / бренд" if entries else "В этом разделе пока нет категорий.",
+        reply_markup=kb.categories(entries),
+    )
 
-        keyboard = await kb.categories(int(main_id))
-        await callback.message.edit_text(
-            "🛒Выберите категорию/бренд",
-            reply_markup=keyboard
-        )
-    except Exception as e:
-        await callback.message.answer(f"Ошибка: {e}")
 
-@router.callback_query(F.data.startswith('category_'))
-async def category(callback: CallbackQuery):
+@router.callback_query(F.data.regexp(r"^category_[1-9][0-9]{0,17}$"))
+async def select_category(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    global category_id 
-    category_id = callback.data.split('_')[1]
-    
-    try:
+    if not isinstance(callback.message, Message):
+        return
+    await state.clear()
+    category = await req.get_category(callback_id(callback))
+    if category is None:
+        await callback.message.answer("Категория не найдена. Откройте /shop.")
+        return
+    entries = await req.get_items(category.id)
+    await callback.message.answer(
+        "🛒 Выберите товар" if entries else "В этой категории пока нет товаров.",
+        reply_markup=kb.items(entries, category.main_category),
+    )
 
-        keyboard = await kb.items(int(category_id))
-        await callback.message.edit_text(
-            "🛒Выберите товар",
-            reply_markup=keyboard
+
+@router.callback_query(F.data.regexp(r"^item_[1-9][0-9]{0,17}$"))
+async def show_item(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+    await state.clear()
+    entry = await req.get_item(callback_id(callback))
+    if entry is None:
+        await callback.message.answer("Товар больше недоступен. Откройте /shop.")
+        return
+    text = f"{entry.name}\n\n{entry.description}\n\nЦена: {entry.price} ₽"
+    markup = kb.item(entry)
+    if entry.picture:
+        photo = BufferedInputFile(entry.picture, filename="product.jpg")
+        # Old SQLite catalogs may contain descriptions beyond the declared String limit.
+        if len(text) <= 1024:
+            await callback.message.answer_photo(photo, caption=text, reply_markup=markup)
+            return
+        await callback.message.answer_photo(photo)
+    for offset in range(0, len(text), 4000):
+        await callback.message.answer(
+            text[offset : offset + 4000],
+            reply_markup=markup if offset + 4000 >= len(text) else None,
         )
-    except Exception as e:
-        await callback.message.answer(f"Ошибка: {e}")
 
 
-
-@router.callback_query(F.data.startswith('item_'))
-async def item(callback: CallbackQuery):
-    global category_id
-    category_id=callback.data.split('_')[1]
-    items= await req.get_item(int(category_id))
-    await callback.message.delete()
-    for item123 in items:
-        item1= f"Имя товара: {item123.name}\n\nОписание товара: {item123.description}\n\nСтоимость товара: {item123.price} руб."
-        image1= BufferedInputFile(item123.picture,filename="image1.jpeg")
-        await callback.message.answer_photo((image1),caption=item1,reply_markup=await kb.item(int(item123.id)))
-
-        
-
-         
-
-@router.callback_query(F.data.startswith("category"))
-async def handle_category_selection(callback: CallbackQuery):
-
-    await callback.message.delete()
-
-@router.callback_query(F.data.startswith("go_back"))
-async def go_back(callback: CallbackQuery):
-   
-    global main_id
-    await callback.message.delete()
-    await callback.message.answer(text="🛒Выберите категорию/бренд",reply_markup=await kb.categories(main_id))
-
-@router.callback_query(F.data.startswith("go_start"))
-async def go_start(callback: CallbackQuery):
-
-    await callback.message.delete()
-    await catelog(callback.message)
-
-  
-        
-        
-
-    
-    
-  
+@router.callback_query(F.data == "go_start")
+async def go_start(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if isinstance(callback.message, Message):
+        await state.clear()
+        await show_catalog(callback.message)
 
 
+@router.callback_query(F.data.regexp(r"^buy_[1-9][0-9]{0,17}$"))
+async def begin_checkout(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    if not isinstance(callback.message, Message):
+        return
+    entry = await req.get_item(callback_id(callback))
+    if entry is None:
+        await callback.message.answer("Товар больше недоступен. Откройте /shop.")
+        return
+    await state.clear()
+    await state.update_data(item_id=entry.id, checkout_key=uuid4().hex)
+    await state.set_state(Checkout.name)
+    user = await req.get_user(callback.from_user.id)
+    await callback.message.answer(
+        "😊 Как к вам обращаться? Введите имя (до 25 символов).\nОтмена: /cancel.",
+        reply_markup=kb.helper(user, "name"),
+    )
+
+
+@router.message(Checkout.name)
+async def get_name(message: Message, state: FSMContext) -> None:
+    if not valid_name(message.text):
+        await message.answer("Введите имя текстом: от 1 до 25 символов.")
+        return
+    await state.update_data(name=message.text.strip())
+    await state.set_state(Checkout.phone)
+    user = await req.get_user(message.from_user.id)
+    await message.answer(
+        "📱 Введите телефон: +79991234567 или 89991234567.",
+        reply_markup=kb.helper(user, "phone"),
+    )
+
+
+@router.message(Checkout.phone)
+async def get_phone(message: Message, state: FSMContext) -> None:
+    phone = normalize_phone(message.text)
+    if phone is None:
+        await message.answer("Неверный телефон. Введите +79991234567 или 89991234567.")
+        return
+    await state.update_data(phone=phone)
+    await state.set_state(Checkout.email)
+    user = await req.get_user(message.from_user.id)
+    await message.answer(
+        "✉️ Введите email (до 50 символов), например buyer@example.com.",
+        reply_markup=kb.helper(user, "email"),
+    )
+
+
+@router.message(Checkout.email)
+async def finish_checkout(
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    admin_chat_id: int,
+) -> None:
+    if not valid_email(message.text):
+        await message.answer("Неверный email. Пример: buyer@example.com (до 50 символов).")
+        return
+    data = await state.get_data()
+    if not {"item_id", "checkout_key", "name", "phone"} <= data.keys():
+        await state.clear()
+        await message.answer(
+            "Оформление устарело. Выберите товар заново: /shop.", reply_markup=kb.main
+        )
+        return
+    try:
+        order = await req.create_order(
+            checkout_key=data["checkout_key"],
+            item_id=data["item_id"],
+            tg_id=message.from_user.id,
+            username=message.from_user.username,
+            name=data["name"],
+            phone=data["phone"],
+            email=message.text.strip(),
+        )
+    except SQLAlchemyError:
+        logger.error("Could not save order")
+        await message.answer("Не удалось сохранить заказ. Попробуйте отправить email ещё раз.")
+        return
+    if order is None:
+        await state.clear()
+        await message.answer("Товар больше недоступен. Откройте /shop.", reply_markup=kb.main)
+        return
+
+    # Persist before any network calls. Failed notifications remain discoverable in the DB.
+    notified = order.notified
+    if not notified:
+        admin_text = (
+            f"✉️ Заказ №{order.id}\nTelegram ID: {order.tg_id}\n"
+            f"Username: {('@' + order.username) if order.username else 'не указан'}\n"
+            f"Имя: {order.name}\nТелефон: {order.phone}\nEmail: {order.email}\n"
+            f"Товар: {order.item_name}\nЦена: {order.price} ₽"
+        )
+        try:
+            await bot.send_message(chat_id=admin_chat_id, text=admin_text)
+            await req.mark_order_notified(order.id)
+            notified = True
+        except (TelegramAPIError, SQLAlchemyError) as exc:
+            logger.error("Order %s notification failed (%s)", order.id, type(exc).__name__)
+    await state.clear()
+    status = (
+        "Менеджер свяжется с вами для уточнения покупки."
+        if notified
+        else "Уведомление менеджеру временно не доставлено. Заявка сохранена; "
+        "пожалуйста, не оформляйте её повторно."
+    )
+    await message.answer(
+        f"✅ Заказ №{order.id} сохранён\nТовар: {order.item_name}\n"
+        f"Цена: {order.price} ₽\n\n{status}",
+        reply_markup=kb.main,
+    )
+
+
+@router.callback_query()
+async def outdated_button(callback: CallbackQuery) -> None:
+    await callback.answer("Эта кнопка устарела. Откройте /shop.", show_alert=True)

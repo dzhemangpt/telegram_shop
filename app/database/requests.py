@@ -1,75 +1,83 @@
-from app.database.models import async_assign,User, Category, Item,Main_Category
+"""Short-lived database sessions and atomic order creation."""
 
-from sqlalchemy import select, update,delete,desc
+from sqlalchemy import select, update
+from sqlalchemy.dialects.sqlite import insert
 
-
-async def set_user(tg_id,username,name,email,phone):
-    async with async_assign() as session:
-        user=  await session.scalar(select(User).where(User.tg_id==tg_id))
-
-        if not user:
-           session.add(User(tg_id=tg_id,name=name,username=username,email=email,phone=phone))    
-           await session.commit()       
+from app.database.models import Category, Item, MainCategory, Order, User, async_session
 
 
+async def get_user(tg_id: int) -> User | None:
+    async with async_session() as session:
+        return await session.get(User, tg_id)
 
 
-
-async def update_user(tg_id, username: str = None, name: str = None, 
-                     email: str = None, phone: str = None):
-    async with async_assign() as session:
-        user = await session.scalar(select(User).where(User.tg_id == tg_id))
-        
-        if not user:
-            await set_user(tg_id=tg_id,username=username,name=name,phone=phone,email=email)
-            await session.commit()
-        
-        else:
-
-            user.username = username
-
-            user.name = name
-
-            user.email = email
-    
-            user.phone = phone
-            
-            await session.commit()
-        return user
+async def get_maincategories() -> list[MainCategory]:
+    async with async_session() as session:
+        return list(await session.scalars(select(MainCategory).order_by(MainCategory.id)))
 
 
-async def get_user(tg_id, field:str = None):
-    async with async_assign() as session:
-        user = await session.scalar(select(User).where(User.tg_id == tg_id))
-    if not user:
-        return False
-    else:
-        if field is None:
-            return user  
-        elif field == 'name':
-            return user.name
-        elif field == 'phone':
-            return user.phone
-        elif field == 'email':
-            return user.email  
-        else:
+async def get_categories(main_category_id: int) -> list[Category]:
+    async with async_session() as session:
+        query = select(Category).where(Category.main_category == str(main_category_id))
+        return list(await session.scalars(query.order_by(Category.id)))
+
+
+async def get_category(category_id: int) -> Category | None:
+    async with async_session() as session:
+        return await session.get(Category, category_id)
+
+
+async def get_items(category_id: int) -> list[Item]:
+    async with async_session() as session:
+        query = select(Item).where(Item.category == category_id).order_by(Item.id)
+        return list(await session.scalars(query))
+
+
+async def get_item(item_id: int) -> Item | None:
+    async with async_session() as session:
+        return await session.get(Item, item_id)
+
+
+async def create_order(
+    *,
+    checkout_key: str,
+    item_id: int,
+    tg_id: int,
+    username: str | None,
+    name: str,
+    phone: str,
+    email: str,
+) -> Order | None:
+    """Save customer and product snapshots together; repeated submissions reuse the order."""
+    async with async_session.begin() as session:
+        existing = await session.scalar(select(Order).where(Order.checkout_key == checkout_key))
+        if existing:
+            return existing
+        item = await session.get(Item, item_id)
+        if item is None:
             return None
+        customer = dict(tg_id=tg_id, username=username or "", name=name, phone=phone, email=email)
+        user_insert = insert(User).values(**customer)
+        await session.execute(
+            user_insert.on_conflict_do_update(
+                index_elements=[User.tg_id],
+                set_=customer,
+            )
+        )
+        order_insert = insert(Order).values(
+            **customer,
+            checkout_key=checkout_key,
+            item_id=item.id,
+            item_name=item.name,
+            item_description=item.description,
+            price=item.price,
+        )
+        await session.execute(
+            order_insert.on_conflict_do_nothing(index_elements=[Order.checkout_key])
+        )
+        return await session.scalar(select(Order).where(Order.checkout_key == checkout_key))
 
-async def get_maincategories():
-    async with async_assign() as session:
-        return await session.scalars(select(Main_Category))
 
-
-
-async def get_categories(main_category_id):
-    async with async_assign() as session:
-        return await session.scalars(select(Category).where(Category.main_category== main_category_id))
-    
-async def get_items(category_id):
-    async with async_assign() as session:
-        return await session.scalars(select(Item).where(Item.category==category_id))
-
-async def get_item(item_id):
-    async with async_assign() as session:
-        return await session.scalars(select(Item).where(Item.id==item_id))    
-
+async def mark_order_notified(order_id: int) -> None:
+    async with async_session.begin() as session:
+        await session.execute(update(Order).where(Order.id == order_id).values(notified=True))
